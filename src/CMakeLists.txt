@@ -38,7 +38,7 @@ set(SOURCES
     FlowManager.cc
     # Json
     json11.cpp
-)
+    AccessCtlApp.cc AccessCtlApp.hh)
 
 add_definitions(
     -DBOOST_ENABLE_ASSERT_HANDLER
