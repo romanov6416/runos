@@ -8,6 +8,7 @@
         "webui",
         "static-flow-pusher",
         "switch-stats",
+        "access-control",
         "stp",
         "arp-handler",
         "flow-manager",

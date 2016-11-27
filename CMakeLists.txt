@@ -18,14 +18,14 @@ pkg_check_modules(GLOG REQUIRED libglog)
 include_directories(SYSTEM
     ${GLOG_INCLUDE_DIRS}
     ${Boost_INCLUDE_DIRS}
-    ${CMAKE_BINARY_DIR}/prefix/include
     ${CMAKE_SOURCE_DIR}/src
+    ${CMAKE_SOURCE_DIR}/third_party/libfluid_base
+    ${CMAKE_SOURCE_DIR}/third_party/libfluid_msg
 )
-
 link_directories(
     ${GLOG_LIBRARY_DIRS}
     ${Boost_LIBRARY_DIRS}
-    ${CMAKE_BINARY_DIR}/prefix/lib
+    ${CMAKE_SOURCE_DIR}/build/prefix/lib
 )
 
 add_subdirectory(src)
