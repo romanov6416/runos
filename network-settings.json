@@ -1,58 +1,84 @@
 {
+    "default": {
+        "services": [
+            "learning-switch",
+            "rest-listener",
+            "host-manager",
+            "webui",
+            "static-flow-pusher",
+            "switch-stats",
+            "access-control",
+            "stp",
+            "arp-handler",
+            "flow-manager",
+            "rest-multipart",
+            "rest-flowmod"
+        ],
 
-"default": {
-    "services": [
-        "learning-switch",
-        "rest-listener",
-        "host-manager",
-        "webui",
-        "static-flow-pusher",
-        "switch-stats",
-        "access-control",
-        "stp",
-        "arp-handler",
-        "flow-manager",
-        "rest-multipart",
-        "rest-flowmod"
-    ],
+        "flow-manager" : {
+            "interval" : 5
+        },
 
-    "flow-manager" : {
-        "interval" : 5
-    },
+        "rest-listener" : {
+             "port" : 8000,
+             "web-dir" : "./build/web"
+        },
 
-    "rest-listener" : {
-         "port" : 8000,
-         "web-dir" : "./build/web"
-    },
+        "controller": {
+             "nthreads": 4,
+             "cbench": false,
+             "pipeline": [
+                 "link-discovery",
+                 "host-manager",
+                 "access-control",
+                 "forwarding"
+             ]
+        },
+        "access-control": {
+            "users-permissions": {
+                "00:00:00:00:00:01": {
+                    "00:00:00:00:00:02": {
+                        "tcp-ports": [],
+                        "udp-ports": [],
+                        "protocols": ["ICMP"]
+                    }
+                }
+            },
+            "default-permissions": {
+                "ff:ff:ff:ff:ff:ff": {
+                    "tcp-ports": [],
+                    "udp-ports": [],
+                    "protocols": ["ARP"]
+                },
+                "00:00:00:00:00:01": {
+                    "tcp-ports": [],
+                    "udp-ports": [],
+                    "protocols": ["ARP"]
+                },
+                "00:00:00:00:00:02": {
+                    "tcp-ports": [],
+                    "udp-ports": [],
+                    "protocols": ["ARP"]
+                }
+            }
+        },
 
-    "controller": {
-         "nthreads": 4,
-         "cbench": false,
-         "pipeline": [
-             "link-discovery",
-             "host-manager",
-             "arp-handler",
-             "forwarding"
-         ]
-    },
+        "loader": {
+            "threads": 2
+        },
 
-    "loader": {
-        "threads": 2
-    },
+        "link-discovery": {
+            "poll-interval": 10,
+            "pin-to-thread": 1
+        },
 
-    "link-discovery": {
-        "poll-interval": 10,
-        "pin-to-thread": 1
-    },
+        "switch-manager": {
+            "pin-to-thread": 1
+        },
 
-    "switch-manager": {
-        "pin-to-thread": 1
-    },
-
-    "switch-stats": {
-	"poll-interval": 1,
-	"pin-to-thread": 1
+        "switch-stats": {
+            "poll-interval": 1,
+            "pin-to-thread": 1
+        }
     }
-}
-
 }
