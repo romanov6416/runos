@@ -67,17 +67,17 @@ Data getICMPerror(Packet &inPkt, Session &s) {
 	icmp_packet icmp_pkt;
 
 	icmp_pkt.eth.type = 0x0800;
+	icmp_pkt.eth.src = ethaddr(tpkt.watch(oxm::eth_src())).to_number();
+	icmp_pkt.eth.dst = ethaddr(tpkt.watch(oxm::eth_dst())).to_number();
 
 	if (s.ethType == ethtypes::ARP) {
 		icmp_pkt.ip.src = uint32_t(tpkt.watch(oxm::arp_tpa()));
 		icmp_pkt.ip.dst = uint32_t(tpkt.watch(oxm::arp_spa()));
-		icmp_pkt.eth.src = ethaddr(tpkt.watch(oxm::arp_tha())).to_number();
-		icmp_pkt.eth.dst = ethaddr(tpkt.watch(oxm::arp_sha())).to_number();
 	} else if (s.ethType == ethtypes::IPv4 || s.ethType == ethtypes::IPv6){
 		icmp_pkt.ip.src = uint32_t(tpkt.watch(oxm::ipv4_dst()));
 		icmp_pkt.ip.dst = uint32_t(tpkt.watch(oxm::ipv4_src()));
-		icmp_pkt.eth.src = ethaddr(tpkt.watch(oxm::eth_dst())).to_number();
-		icmp_pkt.eth.dst = ethaddr(tpkt.watch(oxm::eth_src())).to_number();
+//		icmp_pkt.eth.src = ethaddr(tpkt.watch(oxm::eth_dst())).to_number();
+//		icmp_pkt.eth.dst = ethaddr(tpkt.watch(oxm::eth_src())).to_number();
 	} else {
 		LOG(WARNING) << "unknown ethernet type " << std::hex << "0x" << s.ethType;
 		return Data(nullptr, 0);
@@ -110,9 +110,17 @@ Data getICMPerror(Packet &inPkt, Session &s) {
 
 
 Session::Session(Packet & pkt) {
-	srcEth = ethAddrToString(pkt.load(oxm::eth_src()));
-	dstEth = ethAddrToString(pkt.load(oxm::eth_dst()));
 	ethType = int(pkt.load(oxm::eth_type()));
+//	if (ethType == ethtypes::ARP) {
+//		srcEth = ethAddrToString(pkt.load(oxm::arp_sha()));
+//		dstEth = ethAddrToString(pkt.load(oxm::arp_tha()));
+//	} else {
+		srcEth = ethAddrToString(pkt.load(oxm::eth_src()));
+		dstEth = ethAddrToString(pkt.load(oxm::eth_dst()));
+//	}
+	LOG(INFO) << srcEth << " ->" << dstEth;
+
+
 	if (ethType == ethtypes::IPv4) {
 		ipProto = int(pkt.load(oxm::ip_proto()));
 		srcIP = uint32_t(pkt.load(oxm::ipv4_src()));
@@ -162,6 +170,7 @@ void AccessCtlApp::init(Loader * loader, const Config& config)
 
 			return [=](Packet& pkt, FlowPtr flw, Decision decision) {
 				Session s(pkt);
+				LOG(INFO) << s.srcEth << " ->" << s.dstEth;
 				uint64_t c;
 
 				c = this->hasSymmetricSession(s);
@@ -185,8 +194,8 @@ void AccessCtlApp::init(Loader * loader, const Config& config)
 
 				LOG(INFO) << "has not access";
 				auto tpkt = packet_cast<TraceablePacket>(pkt);
-
 				Data data = getICMPerror(pkt, s);
+
 				of13::PacketOut out;
 				out.buffer_id(OFP_NO_BUFFER);
 				out.data(data.ptr, data.size);
@@ -281,7 +290,7 @@ void AccessCtlApp::addSession(const Session & s, FlowPtr flw) {
 
 void AccessCtlApp::delSession(uint64_t cookie) {
 //	LOG(INFO) << "removed cookie " << std::hex << "0x" << cookie;
-	LOG(INFO) << "got cookie because it was deleted: " << std::hex << "0x" << cookie;
+//	LOG(INFO) << "got cookie because it was deleted: " << std::hex << "0x" << cookie;
 	auto it = curSessions.find(cookie);
 	if (it != curSessions.cend())
 		LOG(INFO) << "remove cookie" << std::hex << it->first;

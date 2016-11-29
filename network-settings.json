@@ -29,7 +29,6 @@
              "cbench": false,
              "pipeline": [
                  "link-discovery",
-                 "host-manager",
                  "access-control",
                  "forwarding"
              ]
