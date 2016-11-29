@@ -13,6 +13,8 @@
 #include "api/PacketMissHandler.hh"
 #include "oxm/openflow_basic.hh"
 #include "types/ethaddr.hh"
+#include <boost/endian/arithmetic.hpp>
+#include <api/TraceablePacket.hh>
 
 #include "Controller.hh"
 #include "SwitchConnection.hh"
@@ -23,78 +25,180 @@
 REGISTER_APPLICATION(AccessCtlApp, {"controller", ""})
 
 
+unsigned short getChecksum(unsigned short *addr, int len) {
+	register int sum = 0;
+	u_short answer = 0;
+	register u_short *w = addr;
+	register int nleft = len;
+	/*
+	* Our algorithm is simple, using a 32 bit accumulator (sum), we add
+	* sequential 16 bit words to it, and at the end, fold back all the
+	* carry bits from the top 16 bits into the lower 16 bits.
+	*/
+	while (nleft > 1)
+	{
+		sum += *w++;
+		nleft -= 2;
+	}
+	/* mop up an odd byte, if necessary */
+	if (nleft == 1)
+	{
+		*(u_char *) (&answer) = *(u_char *) w;
+		sum += answer;
+	}
+	/* add back carry outs from top 16 bits to low 16 bits */
+	sum = (sum >> 16) + (sum & 0xffff); /* add hi 16 to low 16 */
+	sum += (sum >> 16); /* add carry */
+	answer = ~sum; /* truncate to 16 bits */
+	return (answer);
+}
 
-void AccessCtlApp::init(Loader *l, const Config& config)
+
+Data getICMPerror(Packet &inPkt, Session &s) {
+
+	auto inPktSize = packet_cast<SerializablePacket&>(inPkt).total_bytes();
+	uint8_t* inPktData = new uint8_t[inPktSize];
+	packet_cast<SerializablePacket&>(inPkt).serialize_to(inPktSize, inPktData);
+	size_t ipHeaderSize = static_cast<size_t>((inPktData[14] & 15) * 4);
+	auto resultOutPktSize = sizeof(icmp_packet) + ipHeaderSize + 8;
+
+	auto tpkt = packet_cast<TraceablePacket>(inPkt);
+
+	icmp_packet icmp_pkt;
+
+	icmp_pkt.eth.type = 0x0800;
+
+	if (s.ethType == ethtypes::ARP) {
+		icmp_pkt.ip.src = uint32_t(tpkt.watch(oxm::arp_tpa()));
+		icmp_pkt.ip.dst = uint32_t(tpkt.watch(oxm::arp_spa()));
+		icmp_pkt.eth.src = ethaddr(tpkt.watch(oxm::arp_tha())).to_number();
+		icmp_pkt.eth.dst = ethaddr(tpkt.watch(oxm::arp_sha())).to_number();
+	} else if (s.ethType == ethtypes::IPv4 || s.ethType == ethtypes::IPv6){
+		icmp_pkt.ip.src = uint32_t(tpkt.watch(oxm::ipv4_dst()));
+		icmp_pkt.ip.dst = uint32_t(tpkt.watch(oxm::ipv4_src()));
+		icmp_pkt.eth.src = ethaddr(tpkt.watch(oxm::eth_dst())).to_number();
+		icmp_pkt.eth.dst = ethaddr(tpkt.watch(oxm::eth_src())).to_number();
+	} else {
+		LOG(WARNING) << "unknown ethernet type " << std::hex << "0x" << s.ethType;
+		return Data(nullptr, 0);
+	}
+	icmp_pkt.ip.ttl = 255;
+	icmp_pkt.ip.proto = 1;
+	icmp_pkt.ip.identification = 0;
+	icmp_pkt.ip.total_len = resultOutPktSize - sizeof(EthHdr);
+	icmp_pkt.ip.checksum = getChecksum((unsigned short *)(&icmp_pkt.ip), sizeof(IPv4Hdr));
+	icmp_pkt.ip.version = 4;
+	icmp_pkt.ip.ihl = 5;
+	icmp_pkt.ip.dscp = 0;
+	icmp_pkt.ip.ecn = 0;
+	icmp_pkt.ip.flags = 0;
+	icmp_pkt.ip.fragment_offset_unordered = 0;
+
+	icmp_pkt.icmp.type = 3;
+	icmp_pkt.icmp.code = 10;
+	icmp_pkt.icmp.checksum = getChecksum((unsigned short *)(&icmp_pkt.icmp), sizeof(ICMPv4Hdr));
+	icmp_pkt.icmp.unused = 0;
+	icmp_pkt.icmp.mtu = 0;
+
+
+	uint8_t* data = new uint8_t[resultOutPktSize];
+	// copy packet to data
+	memmove(data, &icmp_pkt, sizeof(icmp_pkt));
+	memmove(data + sizeof(icmp_pkt), inPktData + 14, ipHeaderSize + 8);
+	return Data(data, resultOutPktSize);
+}
+
+
+Session::Session(Packet & pkt) {
+	srcEth = ethAddrToString(pkt.load(oxm::eth_src()));
+	dstEth = ethAddrToString(pkt.load(oxm::eth_dst()));
+	ethType = int(pkt.load(oxm::eth_type()));
+	if (ethType == ethtypes::IPv4) {
+		ipProto = int(pkt.load(oxm::ip_proto()));
+		srcIP = uint32_t(pkt.load(oxm::ipv4_src()));
+		dstIP = uint32_t(pkt.load(oxm::ipv4_dst()));
+		if (ipProto == ipprotos::TCP) {
+			srcAppPort = int(pkt.load(oxm::tcp_src()));
+			dstAppPort = int(pkt.load(oxm::tcp_dst()));
+		} else if (ipProto == ipprotos::UDP) {
+			srcAppPort = int(pkt.load(oxm::udp_src()));
+			dstAppPort = int(pkt.load(oxm::udp_dst()));
+		} else {
+			srcAppPort = dstAppPort = -1;
+		}
+	} else {
+		ipProto = srcAppPort = dstAppPort = -1;
+		srcIP = dstIP = -1;
+	}
+}
+
+
+bool Session::isSymmetric(const Session & s) const {
+	return srcEth == s.dstEth && dstEth == s.srcEth &&
+	       ethType == s.ethType && ipProto == s.ipProto &&
+	       srcIP == s.dstIP && dstIP == s.srcIP &&
+	       srcAppPort == s.dstAppPort && dstAppPort == s.srcAppPort;
+}
+
+bool Session::isSame(const Session & s) const {
+	return srcEth == s.srcEth && dstEth == s.dstEth &&
+	       ethType == s.ethType && ipProto == s.ipProto &&
+	       srcIP == s.srcIP && dstIP == s.dstIP &&
+	       srcAppPort == s.srcAppPort && dstAppPort == s.dstAppPort;
+}
+
+
+void AccessCtlApp::init(Loader * loader, const Config& config)
 {
-	loader = l;
 	parseConfig(config);
-	Controller* ctrl = Controller::get(loader);
-
-//	LOG(INFO) << "Homework app init";
-
-	uint8_t table_no = ctrl->reserveTable(); // Your must push flowmod in this table
-	table_no = table_no;
+	Controller * ctrl = Controller::get(loader);
+	QObject::connect(ctrl, &Controller::flowRemoved,
+	                 [=](SwitchConnectionPtr ofconn, of13::FlowRemoved flw) {
+		                 this->flowRemoved(ofconn, flw);
+	                 });
 	ctrl->registerHandler(
 		"access-control",
 		[=](SwitchConnectionPtr connection) {
 
 			return [=](Packet& pkt, FlowPtr flw, Decision decision) {
-
-				// Write your code here
-				//Below example code
 				Session s(pkt);
-				LOG(INFO) << s.srcEth << " " << s.dstEth;
+				uint64_t c;
 
-				if (this->hasSymmetricSession(s)) {
-					LOG(INFO) << "has access (symmetric)";
-					return decision;
+				c = this->hasSymmetricSession(s);
+				if (c) {
+					LOG(INFO) << "has access (symmetric cookie " << std::hex << "0x" << c << ")";
+					return decision.idle_timeout(Decision::duration(RULE_IDLE_TIMEOUT));
 				}
 
-				if (this->hasAccess(s, flw)) {
-					LOG(INFO) << "has access (new)";
+				c = this->hasSameSession(s);
+				if (c) {
+					LOG(INFO) << "has access (same cookie " << std::hex << "0x" << c << ")";;
+					return decision.idle_timeout(Decision::duration(RULE_IDLE_TIMEOUT));
+				}
+
+				c = this->hasAccess(s, flw);
+				if (c) {
+					LOG(INFO) << "has access (new cookie " << std::hex << "0x" << c << ")";;
 					this->addSession(s, flw);
-					return decision;
+					return decision.idle_timeout(Decision::duration(RULE_IDLE_TIMEOUT));
 				}
 
-				// TODO: send ICMP error
 				LOG(INFO) << "has not access";
-				return decision.idle_timeout(std::chrono::seconds::zero()).drop().return_();
-//				LOG(INFO) << "PacketIn captured";
-//
-//				ethaddr eth_dst = pkt.load(oxm::eth_dst());
-//				if (eth_dst.to_number() % 2 == 0){
-//					// I want to drop all packet that ended with zero bits
-//					of13::FlowMod fm;
-//					fm.command(of13::OFPFC_ADD);
-//					fm.table_id(table_no); //  Push your flow in this table
-//
-//					fm.priority(1); // Priority must be higher than 0
-//
-//					std::stringstream ss;
-//					ss << eth_dst;
-//
-//					of13::EthDst* ethDstToFlowMod = new of13::EthDst(
-//						EthAddress( ss.str() )
-//					); // Sorry for this
-//
-//					fm.add_oxm_field(ethDstToFlowMod);
-//					connection->send(fm);
-//				}
-//
-//				return decision;
+				auto tpkt = packet_cast<TraceablePacket>(pkt);
+
+				Data data = getICMPerror(pkt, s);
+				of13::PacketOut out;
+				out.buffer_id(OFP_NO_BUFFER);
+				out.data(data.ptr, data.size);
+				of13::OutputAction action(uint32_t(tpkt.watch(oxm::in_port())), 0);
+				out.add_action(action);
+				connection->send(out);
+				return decision.hard_timeout(std::chrono::seconds::zero()).drop().return_();
 			};
-		});
+		}
+	);
 }
 
-void AccessCtlApp::onSwitchUp(SwitchConnectionPtr ofconn, of13::FeaturesReply fr)
-{
-	LOG(INFO) << "Look! This is a switch " << fr.datapath_id();
-}
-
-void AccessCtlApp::onSwitchDown(SwitchConnectionPtr ofconn)
-{
-	LOG(INFO) << "Look! This is no switch";
-}
 
 void AccessCtlApp::parseConfig(const Config &config) {
 	auto appCfg = config_cd(config, "access-control");
@@ -103,7 +207,6 @@ void AccessCtlApp::parseConfig(const Config &config) {
 		auto hostCfg = userAccess.second.object_items();
 		parseUserPermission(hostCfg, permUsers[userMAC]);
 	}
-//	auto hostCfg = appCfg["default-permissions"].object_items();
 	parseUserPermission(appCfg["default-permissions"], defaultPermission);
 }
 
@@ -118,25 +221,20 @@ void AccessCtlApp::parseUserPermission(const json11::Json & cfg, UserPermission 
 			access.udpPorts.insert(udpPort.int_value());
 		for (auto proto : hostAccessInfo.second["protocols"].array_items())
 			access.protocols.insert(proto.string_value());
-//			LOG(INFO) << *(permUsers[userMAC][dstMAC].tcpPorts.begin());
-//			LOG(INFO) << *(permUsers[userMAC][dstMAC].udpPorts.begin());
 	}
 }
 
 
 
-bool AccessCtlApp::hasAccess(const Session &s, FlowPtr flw) {
+uint64_t AccessCtlApp::hasAccess(const Session &s, FlowPtr flw) {
 	auto userEthIt = permUsers.find(s.srcEth);
 	if (userEthIt == permUsers.cend())
-		return false;
-
+		return 0;
 	if (hasPermission(s, userEthIt->second))
-		return true;
-
+		return flw->cookie();
 	if (hasPermission(s, defaultPermission))
-		return true;
-
-	return false;
+		return flw->cookie();
+	return 0;
 }
 
 
@@ -148,9 +246,6 @@ bool AccessCtlApp::hasPermission(const Session &s, UserPermission &up) {
 		return false;
 
 	AccessInfo & accessInfo = dstEthIt->second;
-
-	LOG(INFO) << *(defaultPermission["ff:ff:ff:ff:ff:ff"].protocols.cbegin());
-	LOG(INFO) << s.ipProto;
 
 	if (s.ethType == ethtypes::ARP) {
 		return accessInfo.protocols.find("ARP") != accessInfo.protocols.cend();
@@ -169,26 +264,40 @@ bool AccessCtlApp::hasPermission(const Session &s, UserPermission &up) {
 }
 
 
-bool AccessCtlApp::hasSymmetricSession(const Session & incomingSession) {
+uint64_t AccessCtlApp::hasSymmetricSession(const Session &incomingSession) {
 	for (auto sInfo : curSessions)
 		if (incomingSession.isSymmetric(sInfo.second))
-			return true;
-	return false;
+			return sInfo.first;
+	return 0;
 }
 
 
 void AccessCtlApp::addSession(const Session & s, FlowPtr flw) {
-//	curSessions[flw->cookie()] = s;
+	LOG(INFO) << "add cookie " << std::hex << "0x" << flw->cookie();
 	curSessions.insert(std::make_pair(flw->cookie(), s));
+	LOG(INFO) << "sessions count " << curSessions.size();
 }
 
 
-void AccessCtlApp::delSession(FlowPtr flw) {
-	curSessions.erase(flw->cookie());
+void AccessCtlApp::delSession(uint64_t cookie) {
+//	LOG(INFO) << "removed cookie " << std::hex << "0x" << cookie;
+	LOG(INFO) << "got cookie because it was deleted: " << std::hex << "0x" << cookie;
+	auto it = curSessions.find(cookie);
+	if (it != curSessions.cend())
+		LOG(INFO) << "remove cookie" << std::hex << it->first;
+	curSessions.erase(cookie);
+	LOG(INFO) << "sessions count " << curSessions.size();
 }
 
 
+void AccessCtlApp::flowRemoved(SwitchConnectionPtr ofconn, of13::FlowRemoved &flw) {
+	delSession(flw.cookie());
+}
 
 
-
-
+uint64_t AccessCtlApp::hasSameSession(const Session &incomingSession) {
+	for (auto sInfo : curSessions)
+		if (incomingSession.isSame(sInfo.second))
+			return sInfo.first;
+	return 0;
+}

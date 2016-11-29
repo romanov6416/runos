@@ -38,11 +38,13 @@
             "users-permissions": {
                 "00:00:00:00:00:01": {
                     "00:00:00:00:00:02": {
-                        "tcp-ports": [],
+                        "tcp-ports": [22],
                         "udp-ports": [],
                         "protocols": ["ICMP"]
                     }
-                }
+                },
+                "00:00:00:00:00:02": {}
+
             },
             "default-permissions": {
                 "ff:ff:ff:ff:ff:ff": {
