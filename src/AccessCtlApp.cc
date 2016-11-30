@@ -74,16 +74,16 @@ Data getICMPerror(Packet &inPkt, Session &s) {
 	icmp_packet icmp_pkt;
 
 	icmp_pkt.eth.type = 0x0800;
-	icmp_pkt.eth.src = ethaddr(tpkt.watch(oxm::eth_src())).to_number();
 	icmp_pkt.eth.dst = ethaddr(tpkt.watch(oxm::eth_dst())).to_number();
+	icmp_pkt.eth.src = ethaddr(tpkt.watch(oxm::eth_src())).to_number();
 
 	if (s.ethType == ethtypes::ARP) {
-		icmp_pkt.ip.src = uint32_t(tpkt.watch(oxm::arp_tpa()));
-		icmp_pkt.ip.dst = uint32_t(tpkt.watch(oxm::arp_spa()));
+		icmp_pkt.ip.dst = uint32_t(tpkt.watch(oxm::arp_tpa()));
+		icmp_pkt.ip.src = uint32_t(tpkt.watch(oxm::arp_spa()));
 		ipHeaderSize = 0;
 	} else if (s.ethType == ethtypes::IPv4){
-		icmp_pkt.ip.src = uint32_t(tpkt.watch(oxm::ipv4_dst()));
-		icmp_pkt.ip.dst = uint32_t(tpkt.watch(oxm::ipv4_src()));
+		icmp_pkt.ip.dst = uint32_t(tpkt.watch(oxm::ipv4_dst()));
+		icmp_pkt.ip.src = uint32_t(tpkt.watch(oxm::ipv4_src()));
 	} else {
 		LOG(WARNING) << "ethernet type " << std::hex << "0x" << s.ethType << " does not support";
 		return Data(nullptr, 0);
