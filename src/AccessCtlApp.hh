@@ -18,7 +18,7 @@
 #include <mutex>
 
 
-constexpr const int RULE_IDLE_TIMEOUT = 10;
+constexpr const unsigned RULE_IDLE_TIMEOUT = 10;
 //constexpr const int RULE_IDLE_TIMEOUT = 30;
 
 
@@ -112,15 +112,14 @@ struct Session {
 };
 
 
-
 struct AccessInfo {
 	std::unordered_set<int> tcpPorts;
 	std::unordered_set<int> udpPorts;
 	std::unordered_set<std::string> protocols;
 };
 
+
 typedef std::unordered_map<std::string, AccessInfo> UserPermission;
-//typedef std::unordered_map<std::string, UserPermissions> Perm;
 
 
 class AccessCtlApp : public Application {
@@ -128,9 +127,9 @@ class AccessCtlApp : public Application {
 
 	std::unordered_map<std::string, UserPermission> permUsers;
 	UserPermission defaultPermission;
-//	std::unordered_map<uint64_t, Session> curSessions;
 	std::vector<Session> curSessions;
 	std::mutex mutex;
+	unsigned defTimeout;
 
 	void parseConfig(const Config & config);
 	void parseUserPermission(const json11::Json & cfg, UserPermission & up);
@@ -143,11 +142,9 @@ class AccessCtlApp : public Application {
 	Decision permit(Decision decision);
 	Decision forbid(Decision decision);
 	Decision miss(Decision decision);
+	Decision packeInHandler(SwitchConnectionPtr conn, Packet &pkt, FlowPtr flw, Decision decision);
 public:
 	void init(Loader* loader, const Config& config) override;
 public slots:
-//	void onSwitchUp(SwitchConnectionPtr ofconn, of13::FeaturesReply fr);
-//	void onSwitchDown(SwitchConnectionPtr ofconn);
 	void flowRemoved(SwitchConnectionPtr ofconn, of13::FlowRemoved &flw);
-//	void flowChangeState(Flow::State newState, uint64_t cookie);
 };
