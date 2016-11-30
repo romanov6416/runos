@@ -14,9 +14,11 @@
 #include "Loader.hh"
 #include <unordered_map>
 #include <unordered_set>
+#include <vector>
 
 
 constexpr const int RULE_IDLE_TIMEOUT = 10;
+//constexpr const int RULE_IDLE_TIMEOUT = 30;
 
 
 namespace ethtypes{
@@ -100,9 +102,12 @@ struct Session {
 	int srcAppPort;
 	int dstAppPort;
 
-	Session(Packet & pkt);
+	std::unordered_set<uint64_t> cookies;
+
+	Session(Packet &pkt, uint64_t cookie);
 	bool isSymmetric(const Session & s) const;
 	bool isSame(const Session & s) const;
+	void addCookie(const uint64_t cookie);
 };
 
 
@@ -122,7 +127,8 @@ class AccessCtlApp : public Application {
 
 	std::unordered_map<std::string, UserPermission> permUsers;
 	UserPermission defaultPermission;
-	std::unordered_map<uint64_t, Session> curSessions;
+//	std::unordered_map<uint64_t, Session> curSessions;
+	std::vector<Session> curSessions;
 
 	void parseConfig(const Config & config);
 	void parseUserPermission(const json11::Json & cfg, UserPermission & up);
@@ -130,7 +136,7 @@ class AccessCtlApp : public Application {
 	uint64_t hasSameSession(const Session &s);
 	uint64_t hasAccess(const Session &s, FlowPtr flw);
 	bool hasPermission(const Session & s, UserPermission & up);
-	void addSession(const Session & s, FlowPtr flw);
+	void addSession(const Session &s);
 	void delSession(uint64_t cookie);
 public:
 	void init(Loader* loader, const Config& config) override;

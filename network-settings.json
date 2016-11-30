@@ -29,6 +29,7 @@
              "cbench": false,
              "pipeline": [
                  "link-discovery",
+                 "host-manager",
                  "access-control",
                  "forwarding"
              ]
@@ -42,8 +43,13 @@
                         "protocols": ["ICMP"]
                     }
                 },
-                "00:00:00:00:00:02": {}
-
+                "00:00:00:00:00:02": {
+                    "00:00:00:00:00:01": {
+                        "tcp-ports": [23],
+                        "udp-ports": [],
+                        "protocols": []
+                    }
+                }
             },
             "default-permissions": {
                 "ff:ff:ff:ff:ff:ff": {

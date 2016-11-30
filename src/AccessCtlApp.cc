@@ -21,6 +21,8 @@
 #include "Flow.hh"
 #include "Common.hh"
 
+#include <sstream>
+
 
 REGISTER_APPLICATION(AccessCtlApp, {"controller", ""})
 
@@ -73,13 +75,14 @@ Data getICMPerror(Packet &inPkt, Session &s) {
 	if (s.ethType == ethtypes::ARP) {
 		icmp_pkt.ip.src = uint32_t(tpkt.watch(oxm::arp_tpa()));
 		icmp_pkt.ip.dst = uint32_t(tpkt.watch(oxm::arp_spa()));
-	} else if (s.ethType == ethtypes::IPv4 || s.ethType == ethtypes::IPv6){
+		ipHeaderSize = 0;
+	} else if (s.ethType == ethtypes::IPv4){
 		icmp_pkt.ip.src = uint32_t(tpkt.watch(oxm::ipv4_dst()));
 		icmp_pkt.ip.dst = uint32_t(tpkt.watch(oxm::ipv4_src()));
 //		icmp_pkt.eth.src = ethaddr(tpkt.watch(oxm::eth_dst())).to_number();
 //		icmp_pkt.eth.dst = ethaddr(tpkt.watch(oxm::eth_src())).to_number();
 	} else {
-		LOG(WARNING) << "unknown ethernet type " << std::hex << "0x" << s.ethType;
+		LOG(WARNING) << "ethernet type " << std::hex << "0x" << s.ethType << " does not support";
 		return Data(nullptr, 0);
 	}
 	icmp_pkt.ip.ttl = 255;
@@ -109,17 +112,12 @@ Data getICMPerror(Packet &inPkt, Session &s) {
 }
 
 
-Session::Session(Packet & pkt) {
+Session::Session(Packet &pkt, uint64_t cookie) {
 	ethType = int(pkt.load(oxm::eth_type()));
-//	if (ethType == ethtypes::ARP) {
-//		srcEth = ethAddrToString(pkt.load(oxm::arp_sha()));
-//		dstEth = ethAddrToString(pkt.load(oxm::arp_tha()));
-//	} else {
-		srcEth = ethAddrToString(pkt.load(oxm::eth_src()));
-		dstEth = ethAddrToString(pkt.load(oxm::eth_dst()));
-//	}
-	LOG(INFO) << srcEth << " ->" << dstEth;
+	srcEth = ethAddrToString(pkt.load(oxm::eth_src()));
+	dstEth = ethAddrToString(pkt.load(oxm::eth_dst()));
 
+	LOG(INFO) << srcEth << " ->" << dstEth;
 
 	if (ethType == ethtypes::IPv4) {
 		ipProto = int(pkt.load(oxm::ip_proto()));
@@ -138,6 +136,7 @@ Session::Session(Packet & pkt) {
 		ipProto = srcAppPort = dstAppPort = -1;
 		srcIP = dstIP = -1;
 	}
+	cookies.insert(cookie);
 }
 
 
@@ -155,24 +154,35 @@ bool Session::isSame(const Session & s) const {
 	       srcAppPort == s.srcAppPort && dstAppPort == s.dstAppPort;
 }
 
+void Session::addCookie(const uint64_t cookie) {
+	cookies.insert(cookie);
+}
+
 
 void AccessCtlApp::init(Loader * loader, const Config& config)
 {
 	parseConfig(config);
 	Controller * ctrl = Controller::get(loader);
 	QObject::connect(ctrl, &Controller::flowRemoved,
-	                 [=](SwitchConnectionPtr ofconn, of13::FlowRemoved flw) {
+	                 [&](SwitchConnectionPtr ofconn, of13::FlowRemoved & flw) {
 		                 this->flowRemoved(ofconn, flw);
+//		                 printf("in lambda: %p\n", &flw);
 	                 });
 	ctrl->registerHandler(
 		"access-control",
 		[=](SwitchConnectionPtr connection) {
 
 			return [=](Packet& pkt, FlowPtr flw, Decision decision) {
-				Session s(pkt);
+//				uint8_t table_no = ctrl->reserveTable(); // Your must push flowmod in this table
+//				table_no = table_no;
+				Session s(pkt, flw->cookie());
 				LOG(INFO) << s.srcEth << " ->" << s.dstEth;
 				uint64_t c;
-
+				auto tpkt1 = packet_cast<TraceablePacket>(pkt);
+				LOG(INFO) << "incomming packet (cookie " << std::hex << "0x" << flw->cookie() << ", port " << uint32_t(tpkt1.watch(oxm::in_port())) << ")";
+				LOG(INFO) << "tcpSrcPort " << s.srcAppPort << ", tcpDstPort " << s.dstAppPort;
+				LOG(INFO) << std::hex << "0x" << s.ipProto;
+//				return decision;
 				c = this->hasSymmetricSession(s);
 				if (c) {
 					LOG(INFO) << "has access (symmetric cookie " << std::hex << "0x" << c << ")";
@@ -182,13 +192,15 @@ void AccessCtlApp::init(Loader * loader, const Config& config)
 				c = this->hasSameSession(s);
 				if (c) {
 					LOG(INFO) << "has access (same cookie " << std::hex << "0x" << c << ")";;
+					this->addSession(s);
 					return decision.idle_timeout(Decision::duration(RULE_IDLE_TIMEOUT));
+//					return decision;
 				}
 
 				c = this->hasAccess(s, flw);
 				if (c) {
 					LOG(INFO) << "has access (new cookie " << std::hex << "0x" << c << ")";;
-					this->addSession(s, flw);
+					this->addSession(s);
 					return decision.idle_timeout(Decision::duration(RULE_IDLE_TIMEOUT));
 				}
 
@@ -202,7 +214,7 @@ void AccessCtlApp::init(Loader * loader, const Config& config)
 				of13::OutputAction action(uint32_t(tpkt.watch(oxm::in_port())), 0);
 				out.add_action(action);
 				connection->send(out);
-				return decision.hard_timeout(std::chrono::seconds::zero()).drop().return_();
+				return decision.drop().hard_timeout(std::chrono::seconds::zero()).return_();
 			};
 		}
 	);
@@ -234,18 +246,20 @@ void AccessCtlApp::parseUserPermission(const json11::Json & cfg, UserPermission 
 }
 
 
-
 uint64_t AccessCtlApp::hasAccess(const Session &s, FlowPtr flw) {
 	auto userEthIt = permUsers.find(s.srcEth);
 	if (userEthIt == permUsers.cend())
 		return 0;
-	if (hasPermission(s, userEthIt->second))
+	if (hasPermission(s, userEthIt->second)) {
+		LOG(INFO) << "person";
 		return flw->cookie();
-	if (hasPermission(s, defaultPermission))
+	}
+	if (hasPermission(s, defaultPermission)) {
+		LOG(INFO) << "default";
 		return flw->cookie();
+	}
 	return 0;
 }
-
 
 
 bool AccessCtlApp::hasPermission(const Session &s, UserPermission &up) {
@@ -255,6 +269,8 @@ bool AccessCtlApp::hasPermission(const Session &s, UserPermission &up) {
 		return false;
 
 	AccessInfo & accessInfo = dstEthIt->second;
+	LOG(INFO) << "ipProto " << s.ethType << ", tcpDstPort " << s.dstAppPort;
+//	LOG(INFO) << "app src port" << s.dstAppPort << " and access tcp port " << *accessInfo.tcpPorts.cbegin();
 
 	if (s.ethType == ethtypes::ARP) {
 		return accessInfo.protocols.find("ARP") != accessInfo.protocols.cend();
@@ -262,9 +278,9 @@ bool AccessCtlApp::hasPermission(const Session &s, UserPermission &up) {
 		if (s.ipProto == ipprotos::ICMP) {
 			return accessInfo.protocols.find("ICMP") != accessInfo.protocols.cend();
 		} else if (s.ipProto == ipprotos::TCP) {
-			return accessInfo.tcpPorts.find(s.dstAppPort) == accessInfo.tcpPorts.cend();
+			return accessInfo.tcpPorts.find(s.dstAppPort) != accessInfo.tcpPorts.cend();
 		} else if (s.ipProto == ipprotos::UDP) {
-			return accessInfo.udpPorts.find(s.dstAppPort) == accessInfo.udpPorts.cend();
+			return accessInfo.udpPorts.find(s.dstAppPort) != accessInfo.udpPorts.cend();
 		} else
 			LOG(WARNING) << "unknown ip protocol " << s.ethType;
 	} else
@@ -274,39 +290,79 @@ bool AccessCtlApp::hasPermission(const Session &s, UserPermission &up) {
 
 
 uint64_t AccessCtlApp::hasSymmetricSession(const Session &incomingSession) {
-	for (auto sInfo : curSessions)
-		if (incomingSession.isSymmetric(sInfo.second))
-			return sInfo.first;
+	for (auto & s : curSessions)
+		if (incomingSession.isSymmetric(s))
+			return *(s.cookies.cbegin());
 	return 0;
 }
 
 
-void AccessCtlApp::addSession(const Session & s, FlowPtr flw) {
-	LOG(INFO) << "add cookie " << std::hex << "0x" << flw->cookie();
-	curSessions.insert(std::make_pair(flw->cookie(), s));
-	LOG(INFO) << "sessions count " << curSessions.size();
+void AccessCtlApp::addSession(const Session & curS) {
+	LOG(INFO) << "add cookie " << std::hex << "0x" << *(curS.cookies.cbegin());
+	for (auto & s : curSessions)
+		if (curS.isSame(s)) {
+			s.addCookie(*curS.cookies.cbegin());
+			return;
+		}
+	curSessions.push_back(curS);
+
+	std::stringstream str;
+	for (auto & s : curSessions)
+		for (auto c : s.cookies)
+			str << std::hex << "0x" << c << ", ";
+	str << std::endl;
+//	LOG(INFO) << "sessions: " << str.str();
 }
 
 
 void AccessCtlApp::delSession(uint64_t cookie) {
 //	LOG(INFO) << "removed cookie " << std::hex << "0x" << cookie;
 //	LOG(INFO) << "got cookie because it was deleted: " << std::hex << "0x" << cookie;
-	auto it = curSessions.find(cookie);
-	if (it != curSessions.cend())
-		LOG(INFO) << "remove cookie" << std::hex << it->first;
-	curSessions.erase(cookie);
-	LOG(INFO) << "sessions count " << curSessions.size();
+	for (auto it = curSessions.cbegin(); it != curSessions.cend(); ++it) {
+		auto & s = *it;
+		if (s.cookies.find(cookie) != s.cookies.cend()) {
+			LOG(INFO) << "removed cookie " << std::hex << "0x" << cookie;
+			curSessions.erase(it);
+			break;
+		}
+	}
+//
+//	auto it = curSessions(cookie);
+//	if (it != curSessions.cend()) {
+//		LOG(INFO) << "remove cookie " << std::hex << "0x" << it->first;
+//		for (auto & s : curSessions) {
+//			if (it->second.isSame(s.second) or it->second.isSymmetric(s.second))
+//				curSessions.erase(s.first);
+//		}
+//	}
+////	curSessions.erase(cookie);
+//////	curSessions.pop(cookie);
+	std::stringstream str;
+	for (auto & s : curSessions)
+		for (auto c : s.cookies)
+			str << std::hex << "0x" << c << ", ";
+	str << std::endl;
+//	LOG(INFO) << "sessions: " << str.str();
 }
 
 
 void AccessCtlApp::flowRemoved(SwitchConnectionPtr ofconn, of13::FlowRemoved &flw) {
 	delSession(flw.cookie());
+//	printf("in handler: %p\n", &flw);
 }
 
 
 uint64_t AccessCtlApp::hasSameSession(const Session &incomingSession) {
-	for (auto sInfo : curSessions)
-		if (incomingSession.isSame(sInfo.second))
-			return sInfo.first;
+	for (auto & s : curSessions)
+		if (incomingSession.isSame(s))
+			return *(s.cookies.cbegin());
 	return 0;
 }
+
+
+//of13::FlowMod fm;
+//fm.priority(1);
+//fm.table_id(table_no);
+//fm.cookie(cookie - твоя кука);
+//fm.flags(of13::OFPFF_SEND_FLOW_REM);
+//conneciton->send(fm);
