@@ -36,11 +36,6 @@ namespace ipprotos {
 };
 
 
-std::string ethAddrToString(const ethaddr & ethAddr) {
-	return std::string(boost::lexical_cast<std::string>(ethAddr));
-}
-
-
 struct Data {
 	void * ptr;
 	size_t size;

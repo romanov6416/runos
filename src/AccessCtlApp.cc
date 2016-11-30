@@ -56,6 +56,11 @@ unsigned short getChecksum(unsigned short *addr, int len) {
 }
 
 
+std::string ethAddrToString(const ethaddr & ethAddr) {
+	return std::string(boost::lexical_cast<std::string>(ethAddr));
+}
+
+
 Data getICMPerror(Packet &inPkt, Session &s) {
 
 	auto inPktSize = packet_cast<SerializablePacket&>(inPkt).total_bytes();
