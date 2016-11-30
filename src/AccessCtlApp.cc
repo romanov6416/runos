@@ -260,12 +260,12 @@ uint64_t AccessCtlApp::hasAccess(const Session &s, FlowPtr flw) {
 	if (userEthIt == permUsers.cend())
 		return 0;
 	if (hasPermission(s, userEthIt->second)) {
-		LOG(INFO) << "person";
+//		LOG(INFO) << "person";
 		return flw->cookie();
 	}
 	if (hasPermission(s, defaultPermission)) {
-		LOG(INFO) << "default";
-		return flw->cookie();
+//		LOG(INFO) << "default";
+//		return flw->cookie();
 	}
 	return 0;
 }
