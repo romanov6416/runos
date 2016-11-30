@@ -173,6 +173,8 @@ void AccessCtlApp::init(Loader * loader, const Config& config)
 		[=](SwitchConnectionPtr connection) {
 
 			return [=](Packet& pkt, FlowPtr flw, Decision decision) {
+				mutex.lock();
+				LOG(INFO) << "lock";
 //				uint8_t table_no = ctrl->reserveTable(); // Your must push flowmod in this table
 //				table_no = table_no;
 				Session s(pkt, flw->cookie());
@@ -186,14 +188,16 @@ void AccessCtlApp::init(Loader * loader, const Config& config)
 				c = this->hasSymmetricSession(s);
 				if (c) {
 					LOG(INFO) << "has access (symmetric cookie " << std::hex << "0x" << c << ")";
-					return decision.idle_timeout(Decision::duration(RULE_IDLE_TIMEOUT));
+					return this->permit(decision);
+//					return decision.idle_timeout(Decision::duration(RULE_IDLE_TIMEOUT));
 				}
 
 				c = this->hasSameSession(s);
 				if (c) {
 					LOG(INFO) << "has access (same cookie " << std::hex << "0x" << c << ")";;
 					this->addSession(s);
-					return decision.idle_timeout(Decision::duration(RULE_IDLE_TIMEOUT));
+					return this->permit(decision);
+//					return decision.idle_timeout(Decision::duration(RULE_IDLE_TIMEOUT));
 //					return decision;
 				}
 
@@ -201,7 +205,8 @@ void AccessCtlApp::init(Loader * loader, const Config& config)
 				if (c) {
 					LOG(INFO) << "has access (new cookie " << std::hex << "0x" << c << ")";;
 					this->addSession(s);
-					return decision.idle_timeout(Decision::duration(RULE_IDLE_TIMEOUT));
+					return this->permit(decision);
+//					return decision.idle_timeout(Decision::duration(RULE_IDLE_TIMEOUT));
 				}
 
 				LOG(INFO) << "has not access";
@@ -214,7 +219,10 @@ void AccessCtlApp::init(Loader * loader, const Config& config)
 				of13::OutputAction action(uint32_t(tpkt.watch(oxm::in_port())), 0);
 				out.add_action(action);
 				connection->send(out);
-				return decision.drop().hard_timeout(std::chrono::seconds::zero()).return_();
+				free(data.ptr);
+//				delete data.ptr;
+				return this->forbid(decision);
+//				return decision.drop().hard_timeout(std::chrono::seconds::zero()).return_();
 			};
 		}
 	);
@@ -311,11 +319,12 @@ void AccessCtlApp::addSession(const Session & curS) {
 		for (auto c : s.cookies)
 			str << std::hex << "0x" << c << ", ";
 	str << std::endl;
-//	LOG(INFO) << "sessions: " << str.str();
+	LOG(INFO) << "sessions: " << str.str();
 }
 
 
 void AccessCtlApp::delSession(uint64_t cookie) {
+	mutex.lock();
 //	LOG(INFO) << "removed cookie " << std::hex << "0x" << cookie;
 //	LOG(INFO) << "got cookie because it was deleted: " << std::hex << "0x" << cookie;
 	for (auto it = curSessions.cbegin(); it != curSessions.cend(); ++it) {
@@ -342,12 +351,14 @@ void AccessCtlApp::delSession(uint64_t cookie) {
 		for (auto c : s.cookies)
 			str << std::hex << "0x" << c << ", ";
 	str << std::endl;
-//	LOG(INFO) << "sessions: " << str.str();
+	LOG(INFO) << "sessions: " << str.str();
+	mutex.unlock();
 }
 
 
 void AccessCtlApp::flowRemoved(SwitchConnectionPtr ofconn, of13::FlowRemoved &flw) {
-	delSession(flw.cookie());
+	if (flw.reason() == of13::OFPRR_HARD_TIMEOUT or flw.reason() == of13::OFPRR_IDLE_TIMEOUT)
+		delSession(flw.cookie());
 //	printf("in handler: %p\n", &flw);
 }
 
@@ -357,6 +368,22 @@ uint64_t AccessCtlApp::hasSameSession(const Session &incomingSession) {
 		if (incomingSession.isSame(s))
 			return *(s.cookies.cbegin());
 	return 0;
+}
+
+Decision AccessCtlApp::permit(Decision decision) {
+	LOG(INFO) << "unlock";
+	mutex.unlock();
+	return decision.idle_timeout(Decision::duration(RULE_IDLE_TIMEOUT));
+}
+
+Decision AccessCtlApp::forbid(Decision decision) {
+	LOG(INFO) << "unlock";
+	mutex.unlock();
+	return decision.drop().hard_timeout(std::chrono::seconds::zero()).return_();
+}
+
+Decision AccessCtlApp::miss(Decision decision) {
+	return decision;
 }
 
 

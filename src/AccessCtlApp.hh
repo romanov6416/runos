@@ -15,6 +15,7 @@
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
+#include <mutex>
 
 
 constexpr const int RULE_IDLE_TIMEOUT = 10;
@@ -129,6 +130,7 @@ class AccessCtlApp : public Application {
 	UserPermission defaultPermission;
 //	std::unordered_map<uint64_t, Session> curSessions;
 	std::vector<Session> curSessions;
+	std::mutex mutex;
 
 	void parseConfig(const Config & config);
 	void parseUserPermission(const json11::Json & cfg, UserPermission & up);
@@ -138,6 +140,9 @@ class AccessCtlApp : public Application {
 	bool hasPermission(const Session & s, UserPermission & up);
 	void addSession(const Session &s);
 	void delSession(uint64_t cookie);
+	Decision permit(Decision decision);
+	Decision forbid(Decision decision);
+	Decision miss(Decision decision);
 public:
 	void init(Loader* loader, const Config& config) override;
 public slots:
